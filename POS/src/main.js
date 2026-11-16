@@ -141,14 +141,14 @@ async function initializeApp() {
 		const existingToken = getCSRFTokenFromCookie()
 		if (existingToken) {
 			log.debug("CSRF token found in cookie")
-			await syncCSRFTokenToWorker()
+			void syncCSRFTokenToWorker()
 			return true
 		}
 
 		log.debug("Fetching CSRF token...")
 		try {
 			await ensureCSRFToken({ silent: true })
-			await syncCSRFTokenToWorker()
+			void syncCSRFTokenToWorker()
 			return true
 		} catch {
 			log.debug("CSRF fetch failed, will retry on first API call")

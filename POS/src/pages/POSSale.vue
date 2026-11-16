@@ -2,6 +2,10 @@
 	<div class="flex flex-col bg-gray-50 overflow-x-hidden" style="height: 100vh; max-height: 100vh;">
 		<!-- Loading State -->
 		<LoadingSpinner v-if="uiStore.isLoading" />
+		<div v-else-if="startupError" class="m-auto p-6 text-center" role="alert">
+			<p class="mb-4">{{ __("Could not start the register. Check your connection and try again.") }}</p>
+			<Button variant="solid" @click="initializeRegister">{{ __("Retry startup") }}</Button>
+		</div>
 
 		<!-- Main App -->
 		<template v-else>
@@ -1044,62 +1048,65 @@ onMounted(async () => {
 	// Store cleanup function for unmount
 	onUnmounted(cleanup)
 
+	const clock = shiftStore.startTimers()
+	onUnmounted(() => {
+		clearInterval(clock)
+		window.removeEventListener("resize", handleResize)
+	})
+	await initializeRegister()
+})
+
+const startupError = ref(false)
+
+async function initializeRegister() {
+	uiStore.setLoading(true)
+	startupError.value = false
 	try {
-		// Start timers for current time and shift duration
-		shiftStore.startTimers()
-
-		// Check for existing open shift
-		const hasShift = await shiftStore.checkShift()
-
+		const hasShift = await startupStep(shiftStore.checkShift(), "check open shift")
 		if (!hasShift) {
 			uiStore.showOpenShiftDialog = true
-		} else {
-			// Set POS profile and load tax rules
-			if (shiftStore.currentProfile) {
-				cartStore.posProfile = shiftStore.profileName
-				cartStore.posOpeningShift = shiftStore.currentShift?.name
-
-				// Load POS Settings
-				await posSettingsStore.loadSettings(shiftStore.profileName)
-				log.info('POS Settings loaded:', {
-					allowPartialPayment: posSettingsStore.allowPartialPayment,
-					settings: posSettingsStore.settings
-				})
-
-				// Load tax rules with tax_inclusive setting from POS Settings
-				await cartStore.loadTaxRules(shiftStore.profileName, posSettingsStore.settings)
-
-				// Set default customer from POS Profile if configured
-				await cartStore.setDefaultCustomer()
-
-				// Note: POS Settings already loaded above via posSettingsStore.loadSettings()
-				// No need to call again since settingsStore is an alias to posSettingsStore
-
-				// Set warehouse context in stock store for stock operations
-				if (shiftStore.profileWarehouse) {
-					stockStore.setWarehouse(shiftStore.profileWarehouse)
-
-					// Note: Periodic stock sync will be configured after items load
-					// See watch() on itemStore.allItems below
-				}
-
-				// Pre-load data for offline use
-				if (!offlineStore.isOffline) {
-					await offlineStore.preloadDataForOffline(shiftStore.currentProfile)
-				} else {
-					await offlineStore.checkOfflineCacheAvailability()
-				}
-			}
+			return
 		}
+		const profile = shiftStore.currentProfile
+		if (!profile) throw new Error("The open shift has no POS profile")
+
+		cartStore.posProfile = shiftStore.profileName
+		cartStore.posOpeningShift = shiftStore.currentShift?.name
+		await startupStep(posSettingsStore.loadSettings(shiftStore.profileName), "load POS settings")
+		await startupStep(cartStore.loadTaxRules(shiftStore.profileName, posSettingsStore.settings), "load tax rules")
+		if (shiftStore.profileWarehouse) stockStore.setWarehouse(shiftStore.profileWarehouse)
+
+		await startupStep(cartStore.setDefaultCustomer(), "load default customer")
 
 		updateLayoutBounds()
-		await draftsStore.updateDraftsCount()
+
+		// Offline cache and draft refreshes have their own status indicators and must not block checkout.
+		const prepareCache = offlineStore.isOffline
+			? offlineStore.checkOfflineCacheAvailability()
+			: offlineStore.preloadDataForOffline(profile)
+		prepareCache.catch(error => log.warn("Could not prepare offline cache", error))
+		draftsStore.updateDraftsCount().catch(error => log.warn("Could not refresh draft count", error))
 	} catch (error) {
-		log.error("Error checking shift:", error)
+		log.error("Could not start register:", error)
+		startupError.value = true
 	} finally {
 		uiStore.setLoading(false)
 	}
-})
+}
+
+async function startupStep(task, name) {
+	let timeout
+	try {
+		return await Promise.race([
+			task,
+			new Promise((_, reject) => {
+				timeout = setTimeout(() => reject(new Error(`Register startup timed out: ${name}`)), 10000)
+			}),
+		])
+	} finally {
+		clearTimeout(timeout)
+	}
+}
 
 watch(
 	() => shiftStore.hasOpenShift,

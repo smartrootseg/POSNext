@@ -74,6 +74,7 @@ async function fetchCSRFToken() {
 		method: "GET",
 		credentials: "include", // Include session cookies
 		cache: "no-store", // Bypass service worker cache for CSRF token refresh
+		signal: AbortSignal.timeout(8000),
 		headers: {
 			Accept: "application/json",
 			"X-Frappe-Site-Name": window.location.hostname,

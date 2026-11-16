@@ -959,8 +959,6 @@ def cleanup_old_drafts(pos_profile=None, max_age_hours=24):
 @frappe.whitelist()
 def get_returnable_invoices(limit=50):
     """Get list of invoices that have items available for return."""
-    invoice.check_permission("read")
-
     # Performance: Use SQL aggregation to calculate returned quantities in one query
     # This eliminates N+1 queries by joining return invoices and aggregating in the database
 
@@ -1003,6 +1001,7 @@ def get_invoice_for_return(invoice_name):
 
     # Get the original invoice
     invoice = frappe.get_doc("Sales Invoice", invoice_name)
+    invoice.check_permission("read")
 
     # Performance: Use SQL aggregation to calculate returned quantities in one query
     # This eliminates N+1 queries by aggregating all return items at once

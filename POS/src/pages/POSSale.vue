@@ -1603,6 +1603,7 @@ async function handlePaymentCompleted(paymentData) {
 
 			if (checkoutPromotionQuote.value) {
 				invoiceData.custom_avenue88_promotion_quote = JSON.stringify(checkoutPromotionQuote.value)
+				invoiceData.custom_avenue88_offline_invoice_uuid = crypto.randomUUID()
 			}
 			await offlineStore.saveInvoiceOffline(invoiceData)
 			uiStore.showSuccess(`OFFLINE-${Date.now()}`, cartStore.grandTotal, paymentData.paid_amount)

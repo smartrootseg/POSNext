@@ -96,7 +96,14 @@ export const getOfflineInvoiceCount = async () => {
 }
 
 // Sync offline invoices to server
-export const syncOfflineInvoices = async () => {
+export function syncOfflineInvoices() {
+	if (typeof navigator !== "undefined" && navigator.locks) {
+		return navigator.locks.request("pos-next-offline-invoice-sync", submitPendingInvoices)
+	}
+	return submitPendingInvoices()
+}
+
+async function submitPendingInvoices() {
 	if (isOffline()) {
 		console.log("Cannot sync while offline")
 		return { success: 0, failed: 0 }

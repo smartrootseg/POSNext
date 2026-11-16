@@ -2,6 +2,7 @@ import { createResource } from "frappe-ui"
 import { computed, ref, toRaw } from "vue"
 import { isOffline } from "@/utils/offline"
 import { useSerialNumberStore } from "@/stores/serialNumber"
+import { serializePromotionInvoiceItems } from "@/utils/serializeOfflineInvoiceItems"
 
 export function useInvoice() {
 	// Serial Number Store for returning serials when items are removed
@@ -693,7 +694,7 @@ export function useInvoice() {
 		return result?.data || result
 	}
 
-	async function submitInvoice() {
+	async function submitInvoice(promotionQuote = null) {
 		/**
 		 * Two-step submission process:
 		 * 1. Create/update draft invoice
@@ -745,6 +746,11 @@ export function useInvoice() {
 			}
 
 			// Add sales_team if provided
+			if (promotionQuote) {
+				invoiceData.items = serializePromotionInvoiceItems(rawItems, taxInclusive.value, promotionQuote)
+				invoiceData.custom_avenue88_promotion_quote = JSON.stringify(promotionQuote)
+			}
+
 			if (rawSalesTeam && rawSalesTeam.length > 0) {
 				invoiceData.sales_team = rawSalesTeam.map((member) => ({
 					sales_person: member.sales_person,

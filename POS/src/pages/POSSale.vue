@@ -706,6 +706,9 @@ import { session } from "@/data/session"
 import { useUserData } from "@/data/user"
 import { parseError } from "@/utils/errorHandler"
 import { offlineWorker } from "@/utils/offline/workerClient"
+import { serializeOfflineInvoiceItems, serializePromotionInvoiceItems } from "@/utils/serializeOfflineInvoiceItems"
+import { readPromotionCatalog, refreshPromotionCatalog } from "@/utils/offline/promotionCatalog"
+import { quotePromotionCart } from "@/utils/pos_promotion_checkout.mjs"
 import { printInvoice, printInvoiceByName } from "@/utils/printInvoice"
 import { Button, Dialog, createResource } from "frappe-ui"
 import { call } from "@/utils/apiWrapper"
@@ -734,6 +737,7 @@ const itemStore = useItemSearchStore()
 const stockStore = useStockStore()
 // Note: settingsStore is an alias to posSettingsStore (same Pinia store singleton)
 const settingsStore = posSettingsStore
+const checkoutPromotionQuote = ref(null)
 
 // Real-time stock updates
 const { onStockUpdate } = useRealtimeStock()
@@ -1433,7 +1437,7 @@ function handleCustomerSelected(selectedCustomer) {
 
 		if (pendingPaymentAfterCustomer.value) {
 			pendingPaymentAfterCustomer.value = false
-			uiStore.showPaymentDialog = true
+			handleProceedToPayment()
 		}
 	} else {
 		cartStore.setCustomer(null)
@@ -1445,7 +1449,7 @@ function handleCreateCustomer(searchValue) {
 	uiStore.showCreateCustomerDialog = true
 }
 
-function handleProceedToPayment() {
+async function handleProceedToPayment() {
 	if (cartStore.isEmpty) {
 		showWarning(__("Please add items to cart before proceeding to payment"))
 		return
@@ -1459,6 +1463,39 @@ function handleProceedToPayment() {
 		return
 	}
 
+	checkoutPromotionQuote.value = null
+	if (shiftStore.currentProfile?.custom_avenue88_promotions_enabled) {
+		try {
+			const profile = cartStore.posProfile
+			const codes = [...itemStore.allItems, ...cartStore.invoiceItems].map(item => item.item_code).filter(Boolean)
+			const bundle = offlineStore.isOffline
+				? await readPromotionCatalog(session.user, profile)
+				: await refreshPromotionCatalog(session.user, profile, codes)
+			if (!bundle || profile !== cartStore.posProfile) {
+				throw new Error(__("Sync promotion data for this POS profile before checkout."))
+			}
+			const date = new Intl.DateTimeFormat("sv-SE", { timeZone: bundle.configuration.timeZone }).format(new Date())
+			const quote = quotePromotionCart(cartStore.invoiceItems.map(line => ({
+				item_code: line.item_code,
+				qty: line.quantity,
+				basePrice: Math.round((line.price_list_rate ?? line.rate) * 100),
+			})), bundle.catalog, bundle.configuration, date)
+			const discounts = new Map()
+			for (const line of quote.lines) {
+				discounts.set(line.cartLine, (discounts.get(line.cartLine) || 0) + line.qty * line.unitDiscount)
+			}
+			for (const [index, item] of cartStore.invoiceItems.entries()) {
+				item.discount_percentage = 0
+				item.discount_amount = (discounts.get(index) || 0) / 100
+				cartStore.recalculateItem(item)
+			}
+			cartStore.rebuildIncrementalCache()
+			checkoutPromotionQuote.value = { ...quote, snapshot: bundle.configuration }
+		} catch (error) {
+			showError(error.message)
+			return
+		}
+	}
 	uiStore.showPaymentDialog = true
 }
 
@@ -1525,7 +1562,9 @@ async function handlePaymentCompleted(paymentData) {
 				pos_profile: cartStore.posProfile,
 				posa_pos_opening_shift: cartStore.posOpeningShift,
 				customer: customerValue || shiftStore.profileCustomer,
-				items: JSON.parse(JSON.stringify(cartStore.invoiceItems)),
+				items: checkoutPromotionQuote.value
+					? serializePromotionInvoiceItems(cartStore.invoiceItems, cartStore.taxInclusive, checkoutPromotionQuote.value)
+					: serializeOfflineInvoiceItems(cartStore.invoiceItems, cartStore.taxInclusive),
 				payments: JSON.parse(JSON.stringify(cartStore.payments)),
 				sales_team: JSON.parse(JSON.stringify(cartStore.salesTeam || [])),
 				grand_total: cartStore.grandTotal,
@@ -1533,6 +1572,9 @@ async function handlePaymentCompleted(paymentData) {
 				total_discount: cartStore.totalDiscount,
 			}
 
+			if (checkoutPromotionQuote.value) {
+				invoiceData.custom_avenue88_promotion_quote = JSON.stringify(checkoutPromotionQuote.value)
+			}
 			await offlineStore.saveInvoiceOffline(invoiceData)
 			uiStore.showSuccess(`OFFLINE-${Date.now()}`, cartStore.grandTotal, paymentData.paid_amount)
 			uiStore.showPaymentDialog = false
@@ -1550,7 +1592,7 @@ async function handlePaymentCompleted(paymentData) {
 			// Get item codes from cart before clearing
 			const soldItemCodes = cartStore.invoiceItems.map(item => item.item_code)
 
-			const result = await cartStore.submitInvoice()
+			const result = await cartStore.submitInvoice(checkoutPromotionQuote.value)
 
 			if (result) {
 				const invoiceName = result.name || result.message?.name || __('Unknown')

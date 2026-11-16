@@ -1166,6 +1166,27 @@ async function handleCreateReturn() {
 		return
 	}
 
+	const recordedGroups = originalInvoice.value?.custom_avenue88_promotion_groups
+	if (recordedGroups) {
+		try {
+			const groups = typeof recordedGroups === "string" ? JSON.parse(recordedGroups) : recordedGroups
+			const quantities = new Map(selectedItems.value.map(item => [item.name, Math.abs(Number(item.return_qty))]))
+			const incomplete = groups.filter(group =>
+				group.lines.some(line => quantities.has(line.sourceRow)) &&
+				group.lines.some(line => quantities.get(line.sourceRow) !== Number(line.qty)),
+			)
+			if (incomplete.length) {
+				openErrorDialog(__("Return all items in these Buy X Get Y offers together: {0}", [
+					incomplete.map(group => group.title).join(", "),
+				]))
+				return
+			}
+		} catch {
+			openErrorDialog(__("The promotion details on the original invoice could not be read."))
+			return
+		}
+	}
+
 	submitError.value = ""
 	isSubmitting.value = true
 

@@ -120,6 +120,7 @@ export function selectBestPromotions(units, promotions, profile, date) {
 
     const contested = [...groups.values()];
     let best = { savings: -1, bundles: [], percentages: [] };
+    let searchSteps = 0;
 
     function evaluate() {
         const applications = [];
@@ -146,6 +147,9 @@ export function selectBestPromotions(units, promotions, profile, date) {
     }
 
     function distribute(groupIndex, optionIndex, start) {
+        if (++searchSteps > 100000 || optionIndex > 100) {
+            throw new Error("Too many overlapping promotion combinations to price this cart.");
+        }
         if (groupIndex === contested.length) {
             evaluate();
             return;

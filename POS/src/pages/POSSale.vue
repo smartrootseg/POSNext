@@ -1136,6 +1136,22 @@ let periodicSyncConfigured = false
 let lastSyncWarehouse = null
 let lastSyncItemSignature = ''
 
+watch(
+	() => [
+		session.user, cartStore.posProfile, shiftStore.currentProfile?.custom_avenue88_promotions_enabled,
+		offlineStore.isOffline, itemStore.allItems.length,
+	],
+	async ([user, profile, enabled, offline, count]) => {
+		if (!user || !profile || !enabled || offline || !count) return
+		try {
+			await refreshPromotionCatalog(user, profile, itemStore.allItems.map(item => item.item_code).filter(Boolean))
+		} catch (error) {
+			log.warn("Could not preload offline promotions", error)
+		}
+	},
+	{ immediate: true },
+)
+
 // Watch for items to be loaded or changed, then configure periodic stock sync
 watch(
 	() => {
@@ -1475,11 +1491,23 @@ async function handleProceedToPayment() {
 				throw new Error(__("Sync promotion data for this POS profile before checkout."))
 			}
 			const date = new Intl.DateTimeFormat("sv-SE", { timeZone: bundle.configuration.timeZone }).format(new Date())
-			const quote = quotePromotionCart(cartStore.invoiceItems.map(line => ({
-				item_code: line.item_code,
-				qty: line.quantity,
-				basePrice: Math.round((line.price_list_rate ?? line.rate) * 100),
-			})), bundle.catalog, bundle.configuration, date)
+			const age = (Date.parse(date) - Date.parse(bundle.configuration.siteDate)) / 86400000
+			if (!Number.isInteger(age) || age < 0 || age > bundle.configuration.validDays) {
+				throw new Error(__("Reconnect this terminal to refresh its promotion data before checkout."))
+			}
+			const itemProofs = Object.create(null)
+			const facts = Object.create(null)
+			const lines = cartStore.invoiceItems.map(line => {
+				const proof = bundle.catalog[line.item_code]
+				if (!proof || line.uom !== proof.uom ||
+					Math.round((line.price_list_rate ?? line.rate) * 100) !== proof.basePrice) {
+					throw new Error(__("Refresh the catalog price for {0} before checkout.", [line.item_code]))
+				}
+				itemProofs[line.item_code] = proof
+				facts[line.item_code] = proof.facts
+				return { item_code: line.item_code, qty: line.quantity, basePrice: proof.basePrice }
+			})
+			const quote = quotePromotionCart(lines, facts, bundle.configuration, date)
 			const discounts = new Map()
 			for (const line of quote.lines) {
 				discounts.set(line.cartLine, (discounts.get(line.cartLine) || 0) + line.qty * line.unitDiscount)
@@ -1490,7 +1518,7 @@ async function handleProceedToPayment() {
 				cartStore.recalculateItem(item)
 			}
 			cartStore.rebuildIncrementalCache()
-			checkoutPromotionQuote.value = { ...quote, snapshot: bundle.configuration }
+			checkoutPromotionQuote.value = { ...quote, snapshot: bundle.configuration, itemProofs }
 		} catch (error) {
 			showError(error.message)
 			return

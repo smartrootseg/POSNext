@@ -10,6 +10,7 @@ export function quotePromotionCart(lines, catalog, configuration, saleDate) {
             !Number.isSafeInteger(line.basePrice) || line.basePrice < 0) {
             throw new Error(`Invalid promotion quantity or base price for ${line.item_code}.`);
         }
+        if (units.length + line.qty > 250) throw new Error("A promotion cart can contain up to 250 units.");
         for (let index = 0; index < line.qty; index++) {
             units.push({ id: `${lineIndex}:${index}`, lineIndex, price: line.basePrice, item });
         }

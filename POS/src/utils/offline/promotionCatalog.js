@@ -21,6 +21,7 @@ export async function refreshPromotionCatalog(user, profile, itemCodes) {
 		const facts = await call(`${methods}.get_promotion_item_facts`, {
 			pos_profile: profile,
 			item_codes: JSON.stringify(codes.slice(offset, offset + 200)),
+			configuration: JSON.stringify(configuration),
 		})
 		Object.assign(catalog, facts)
 	}

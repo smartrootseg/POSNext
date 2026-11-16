@@ -461,6 +461,11 @@ def update_invoice(data):
         # Populate missing fields (company, currency, accounts, etc.)
         invoice_doc.set_missing_values()
 
+        # ERPNext rebuilds the POS payment rows from profile defaults when
+        # it fills missing values. Restore the amounts entered at checkout.
+        if data.get("payments"):
+            invoice_doc.set("payments", data["payments"])
+
         # Calculate totals and apply discounts (with rounding disabled)
         invoice_doc.calculate_taxes_and_totals()
 

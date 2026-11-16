@@ -1,3 +1,4 @@
+import { call } from "@/utils/apiWrapper"
 import { db } from "./db"
 
 const maxAgeMs = 24 * 60 * 60 * 1000
@@ -13,10 +14,8 @@ export async function readReturnInvoices(user, profile) {
 	return usable(row?.value || []).map(entry => entry.invoice)
 }
 
-export async function cacheReturnInvoice(user, profile, invoice) {
-	if (!user || !profile || invoice.pos_profile !== profile || invoice.docstatus !== 1 || invoice.is_return) return
-	const cacheKey = keyFor(user, profile)
-	const snapshot = {
+function toSnapshot(invoice) {
+	return {
 		name: invoice.name,
 		docstatus: invoice.docstatus,
 		is_return: invoice.is_return,
@@ -46,6 +45,40 @@ export async function cacheReturnInvoice(user, profile, invoice) {
 			amount: payment.amount,
 		})),
 	}
+}
+
+const refreshes = new Map()
+
+export function refreshReturnInvoices(user, profile) {
+	if (!user || !profile) return
+	const key = keyFor(user, profile)
+	if (refreshes.has(key)) return refreshes.get(key)
+	const startedAt = Date.now()
+	const refresh = (async () => {
+		const invoices = await call("pos_next.api.invoices.get_offline_return_invoices", { pos_profile: profile })
+		const cachedAt = Date.now()
+		await db.transaction("rw", db.settings, db.invoice_queue, async () => {
+			const queued = await db.invoice_queue.filter(entry => entry.data?.is_return).toArray()
+			// Ignore returns posted or queued after the snapshot request started.
+			const unavailable = new Set(queued.filter(entry => !entry.synced ||
+				entry.timestamp >= startedAt).map(entry => entry.data.return_against))
+			const entries = invoices.filter(invoice => invoice.pos_profile === profile &&
+				invoice.docstatus === 1 && !invoice.is_return && invoice.items.length &&
+				!unavailable.has(invoice.name))
+				.map(invoice => ({ cachedAt, invoice: toSnapshot(invoice) }))
+			await db.settings.put({ key, value: entries })
+		})
+	})()
+	refreshes.set(key, refresh)
+	const clear = () => refreshes.delete(key)
+	refresh.then(clear, clear)
+	return refresh
+}
+
+export async function cacheReturnInvoice(user, profile, invoice) {
+	if (!user || !profile || invoice.pos_profile !== profile || invoice.docstatus !== 1 || invoice.is_return) return
+	const cacheKey = keyFor(user, profile)
+	const snapshot = toSnapshot(invoice)
 	await db.transaction("rw", db.settings, async () => {
 		const row = await db.settings.get(cacheKey)
 		const entries = usable(row?.value || []).filter(entry => entry.invoice.name !== invoice.name)

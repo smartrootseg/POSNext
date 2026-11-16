@@ -724,6 +724,7 @@ import { useUserData } from "@/data/user"
 import { parseError } from "@/utils/errorHandler"
 import { offlineWorker } from "@/utils/offline/workerClient"
 import { serializeOfflineInvoiceItems, serializePromotionInvoiceItems } from "@/utils/serializeOfflineInvoiceItems"
+import { refreshReturnInvoices } from "@/utils/offline/returnInvoices"
 import { readPromotionCatalog, refreshPromotionCatalog } from "@/utils/offline/promotionCatalog"
 import { setSyncInterruptionForTesting } from "@/utils/offline/sync"
 import { quotePromotionCart } from "@/utils/pos_promotion_checkout.mjs"
@@ -1218,6 +1219,20 @@ watch(
 		} catch (error) {
 			log.warn("Could not cache promotion prices for selected items", error)
 		}
+	},
+	{ immediate: true },
+)
+
+// Refresh the return list at register startup, on reconnection, and during an online shift.
+watch(
+	() => [session.user, cartStore.posProfile, shiftStore.hasOpenShift, offlineStore.isOffline],
+	([user, profile, openShift, offline], _previous, onCleanup) => {
+		if (!user || !profile || !openShift || offline) return
+		const refresh = () => refreshReturnInvoices(user, profile)?.catch(error =>
+			log.warn("Could not refresh offline returns", error))
+		refresh()
+		const timer = setInterval(refresh, 5 * 60 * 1000)
+		onCleanup(() => clearInterval(timer))
 	},
 	{ immediate: true },
 )

@@ -1040,6 +1040,40 @@ def get_invoice_for_return(invoice_name):
     return invoice_dict
 
 
+@frappe.whitelist(methods=["GET", "POST"])
+def get_offline_return_invoices(pos_profile):
+    if not frappe.db.exists("POS Profile User", {"parent": pos_profile, "parenttype": "POS Profile", "user": frappe.session.user}):
+        frappe.throw(_("You do not have access to this POS profile."), frappe.PermissionError)
+
+    filters = {"pos_profile": pos_profile, "docstatus": 1, "is_return": 0, "is_pos": 1}
+    invoices = frappe.get_list(
+        "Sales Invoice", filters=filters, pluck="name",
+        order_by="posting_date desc, creation desc", limit_page_length=50,
+    )
+    result = []
+    for name in invoices:
+        try:
+            invoice = get_invoice_for_return(name)
+        except frappe.PermissionError:
+            continue
+        if invoice.get("items"):
+            result.append({
+                key: invoice.get(key) for key in (
+                    "name", "pos_profile", "docstatus", "is_return", "status", "customer", "customer_name",
+                    "company", "posting_date", "grand_total", "paid_amount", "outstanding_amount",
+                    "custom_avenue88_promotion_groups",
+                )
+            } | {
+                "items": [{key: row.get(key) for key in (
+                    "name", "item_code", "item_name", "qty", "original_qty", "already_returned",
+                    "rate", "warehouse", "uom", "conversion_factor",
+                )} for row in invoice["items"]],
+                "payments": [{key: row.get(key) for key in ("mode_of_payment", "amount")}
+                             for row in invoice.get("payments", [])],
+            })
+    return result
+
+
 @frappe.whitelist()
 def search_invoices_for_return(
     invoice_name=None,

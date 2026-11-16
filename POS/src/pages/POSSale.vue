@@ -5,6 +5,15 @@
 
 		<!-- Main App -->
 		<template v-else>
+			<button
+				v-if="showOfflineTestControl && shiftStore.hasOpenShift"
+				type="button"
+				:disabled="changingOfflineTestMode"
+				class="shrink-0 bg-amber-100 px-4 py-2 text-left text-sm text-amber-950"
+				@click="toggleOfflineTestMode"
+			>
+				{{ offlineTestMode ? __('Reconnect test register') : __('Put test register offline') }}
+			</button>
 			<!-- Header -->
 			<POSHeader
 				:current-time="shiftStore.currentTime"
@@ -713,6 +722,7 @@ import { printInvoice, printInvoiceByName } from "@/utils/printInvoice"
 import { Button, Dialog, createResource } from "frappe-ui"
 import { call } from "@/utils/apiWrapper"
 import { computed, onMounted, onUnmounted, ref, watch } from "vue"
+
 import { useToast } from "@/composables/useToast"
 
 import { useItemSearchStore } from "@/stores/itemSearch"
@@ -725,6 +735,24 @@ import { usePOSShiftStore } from "@/stores/posShift"
 import { usePOSSyncStore } from "@/stores/posSync"
 import { usePOSUIStore } from "@/stores/posUI"
 import { logger } from "@/utils/logger"
+
+const showOfflineTestControl = window.location.hostname === "avenue88-testing.k.frappe.cloud"
+const offlineTestMode = ref(false)
+const changingOfflineTestMode = ref(false)
+
+async function toggleOfflineTestMode() {
+	const nextMode = !offlineTestMode.value
+	changingOfflineTestMode.value = true
+	try {
+		await offlineWorker.setManualOffline(nextMode)
+		offlineTestMode.value = nextMode
+	} catch (error) {
+		await offlineWorker.setManualOffline(offlineTestMode.value).catch(() => {})
+		console.error("Unable to change the test register's offline mode", error)
+	} finally {
+		changingOfflineTestMode.value = false
+	}
+}
 
 // Initialize stores
 const cartStore = usePOSCartStore()

@@ -95,6 +95,20 @@ export const getOfflineInvoiceCount = async () => {
 	}
 }
 
+// Test-only switch: simulate losing the server response after it has committed the sale.
+const TEST_SYNC_KEY = "avenue88-testing-sync-interruption"
+const isTestingSite = () => typeof window !== "undefined" &&
+	window.location.hostname === "avenue88-testing.k.frappe.cloud"
+const testSyncState = () => isTestingSite() ? window.sessionStorage.getItem(TEST_SYNC_KEY) : null
+
+export function setSyncInterruptionForTesting(state) {
+	if (!isTestingSite()) return null
+	const previous = testSyncState()
+	if (state === null) window.sessionStorage.removeItem(TEST_SYNC_KEY)
+	else window.sessionStorage.setItem(TEST_SYNC_KEY, state)
+	return previous
+}
+
 // Sync offline invoices to server
 export function syncOfflineInvoices() {
 	if (typeof navigator !== "undefined" && navigator.locks) {
@@ -104,6 +118,7 @@ export function syncOfflineInvoices() {
 }
 
 async function submitPendingInvoices() {
+	if (testSyncState() === "paused") return { success: 0, failed: 0 }
 	if (isOffline()) {
 		console.log("Cannot sync while offline")
 		return { success: 0, failed: 0 }
@@ -140,6 +155,12 @@ async function submitPendingInvoices() {
 			})
 
 			if (response.message || response.name) {
+				if (testSyncState() === "armed" && invoiceData.custom_avenue88_offline_invoice_uuid) {
+					setSyncInterruptionForTesting("paused")
+					console.info(`Testing: invoice ${invoice.id} reached ERPNext as ${response.name || response.message}; local acknowledgement dropped`)
+					return { success: successCount, failed: failedCount, errors }
+				}
+				if (response.replayed) console.info(`Offline retry matched existing invoice ${response.name}`)
 				// Mark as synced
 				await db.invoice_queue.update(invoice.id, { synced: true })
 				successCount++

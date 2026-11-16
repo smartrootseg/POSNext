@@ -14,6 +14,14 @@
 			>
 				{{ offlineTestMode ? __('Reconnect test register') : __('Put test register offline') }}
 			</button>
+			<button
+				v-if="showOfflineTestControl && shiftStore.hasOpenShift"
+				type="button"
+				class="shrink-0 bg-amber-50 px-4 py-2 text-left text-sm"
+				@click="handleTestSyncInterruption"
+			>
+				{{ offlineTestMode ? __('Arm one sync interruption') : __('Retry interrupted test sync') }}
+			</button>
 			<!-- Header -->
 			<POSHeader
 				:current-time="shiftStore.currentTime"
@@ -717,6 +725,7 @@ import { parseError } from "@/utils/errorHandler"
 import { offlineWorker } from "@/utils/offline/workerClient"
 import { serializeOfflineInvoiceItems, serializePromotionInvoiceItems } from "@/utils/serializeOfflineInvoiceItems"
 import { readPromotionCatalog, refreshPromotionCatalog } from "@/utils/offline/promotionCatalog"
+import { setSyncInterruptionForTesting } from "@/utils/offline/sync"
 import { quotePromotionCart } from "@/utils/pos_promotion_checkout.mjs"
 import { printInvoice, printInvoiceByName } from "@/utils/printInvoice"
 import { Button, Dialog, createResource } from "frappe-ui"
@@ -744,6 +753,10 @@ async function toggleOfflineTestMode() {
 	const nextMode = !offlineTestMode.value
 	changingOfflineTestMode.value = true
 	try {
+		if (nextMode && shiftStore.currentProfile?.custom_avenue88_promotions_enabled) {
+			const codes = [...itemStore.searchResults, ...cartStore.invoiceItems].map(item => item.item_code)
+			await refreshPromotionCatalog(session.user, cartStore.posProfile, codes, { missingOnly: true })
+		}
 		await offlineWorker.setManualOffline(nextMode)
 		offlineTestMode.value = nextMode
 	} catch (error) {
@@ -751,6 +764,16 @@ async function toggleOfflineTestMode() {
 		console.error("Unable to change the test register's offline mode", error)
 	} finally {
 		changingOfflineTestMode.value = false
+	}
+}
+
+function handleTestSyncInterruption() {
+	if (!showOfflineTestControl) return
+	if (offlineTestMode.value) {
+		setSyncInterruptionForTesting("armed")
+		showSuccess(__("The next sync will pause after ERPNext saves the invoice."))
+	} else if (setSyncInterruptionForTesting(null) === "paused") {
+		handleSyncClick()
 	}
 }
 
@@ -1175,6 +1198,25 @@ watch(
 			await refreshPromotionCatalog(user, profile, itemStore.allItems.map(item => item.item_code).filter(Boolean))
 		} catch (error) {
 			log.warn("Could not preload offline promotions", error)
+		}
+	},
+	{ immediate: true },
+)
+
+// Searches and barcode/variant selection can find items outside the browsed item page.
+watch(
+	() => [
+		session.user, cartStore.posProfile, shiftStore.currentProfile?.custom_avenue88_promotions_enabled,
+		offlineStore.isOffline,
+		JSON.stringify([...new Set([...itemStore.searchResults, ...cartStore.invoiceItems]
+			.map(item => item.item_code).filter(Boolean))].sort()),
+	],
+	async ([user, profile, enabled, offline, itemCodes]) => {
+		if (!user || !profile || !enabled || offline || itemCodes === "[]") return
+		try {
+			await refreshPromotionCatalog(user, profile, JSON.parse(itemCodes), { missingOnly: true })
+		} catch (error) {
+			log.warn("Could not cache promotion prices for selected items", error)
 		}
 	},
 	{ immediate: true },

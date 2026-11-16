@@ -565,7 +565,9 @@ def submit_invoice(invoice=None, data=None):
 
         offline_id_field = "custom_avenue88_offline_invoice_uuid"
         offline_id = invoice.get(offline_id_field)
-        if offline_id and frappe.get_meta(doctype).has_field(offline_id_field):
+        if offline_id:
+            if not frappe.get_meta(doctype).has_field(offline_id_field):
+                frappe.throw(_("Offline invoice ID is not configured. The sale remains in the register queue."))
             existing = frappe.db.get_value(
                 doctype, {offline_id_field: offline_id}, ["name", "owner", "pos_profile", "docstatus"],
                 as_dict=True,
@@ -574,7 +576,7 @@ def submit_invoice(invoice=None, data=None):
                 if existing.owner != frappe.session.user or existing.pos_profile != pos_profile:
                     frappe.throw(_("This offline invoice belongs to another register."), frappe.PermissionError)
                 if existing.docstatus == 1:
-                    return {"name": existing.name, "status": existing.docstatus}
+                    return {"name": existing.name, "status": existing.docstatus, "replayed": True}
                 frappe.throw(_("This offline sale already has an invoice which is not submitted."))
 
         invoice_name = invoice.get("name")

@@ -565,6 +565,17 @@ def submit_invoice(invoice=None, data=None):
 
         offline_id_field = "custom_avenue88_offline_invoice_uuid"
         offline_id = invoice.get(offline_id_field)
+        if offline_id and invoice.get("is_return"):
+            source = invoice.get("return_against")
+            if not source:
+                frappe.throw(_("An offline return must reference the original invoice."))
+            original = frappe.get_doc(doctype, source, for_update=True)
+            original.check_permission("read")
+            if original.docstatus != 1 or original.is_return or original.pos_profile != pos_profile:
+                frappe.throw(_("This invoice is not returnable on this POS profile."))
+            if original.customer != invoice.get("customer") or original.company != invoice.get("company"):
+                frappe.throw(_("The return must use the original customer and company."))
+
         if offline_id:
             if not frappe.get_meta(doctype).has_field(offline_id_field):
                 frappe.throw(_("Offline invoice ID is not configured. The sale remains in the register queue."))
@@ -948,6 +959,8 @@ def cleanup_old_drafts(pos_profile=None, max_age_hours=24):
 @frappe.whitelist()
 def get_returnable_invoices(limit=50):
     """Get list of invoices that have items available for return."""
+    invoice.check_permission("read")
+
     # Performance: Use SQL aggregation to calculate returned quantities in one query
     # This eliminates N+1 queries by joining return invoices and aggregating in the database
 

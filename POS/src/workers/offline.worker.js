@@ -406,11 +406,19 @@ async function saveOfflineInvoice(invoiceData) {
 			throw new Error("Cannot save empty invoice")
 		}
 
-		const id = await db.table("invoice_queue").add({
-			data: invoiceData,
-			timestamp: Date.now(),
-			synced: false,
-			retry_count: 0,
+		const queue = db.table("invoice_queue")
+		const id = await db.transaction("rw", queue, async () => {
+			if (invoiceData.is_return && invoiceData.return_against) {
+				const pending = await queue.filter(entry => !entry.synced && entry.data.is_return &&
+					entry.data.return_against === invoiceData.return_against).first()
+				if (pending) throw new Error("A return for this invoice is already waiting to sync.")
+			}
+			return queue.add({
+				data: invoiceData,
+				timestamp: Date.now(),
+				synced: false,
+				retry_count: 0,
+			})
 		})
 
 		// NOTE: We don't update local stock here because:

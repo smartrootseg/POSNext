@@ -21,7 +21,7 @@
 						/>
 						<Button
 							variant="subtle"
-							@click="loadInvoicesResource.reload()"
+							@click="loadReturnInvoices()"
 							:loading="loadInvoicesResource.loading"
 							:title="__('Refresh')"
 						>
@@ -64,7 +64,7 @@
 							</div>
 						</div>
 						<p v-if="!loadInvoicesResource.loading && filteredInvoiceList.length === 0" class="text-center py-8 text-gray-500 text-sm">
-							{{ __('No invoices found') }}
+							{{ syncStore.isOffline ? __('Open an invoice in Returns while online to make it available offline.') : __('No invoices found') }}
 						</p>
 					</div>
 				</div>
@@ -558,6 +558,10 @@
 </template>
 
 <script setup>
+import { session } from "@/data/session"
+import { usePOSSyncStore } from "@/stores/posSync"
+import { offlineWorker } from "@/utils/offline/workerClient"
+import { cacheReturnInvoice, invalidateReturnInvoice, readReturnInvoices } from "@/utils/offline/returnInvoices"
 import { useToast } from "@/composables/useToast"
 import { getPaymentIcon } from "@/utils/payment"
 import { formatCurrency as formatCurrencyUtil } from "@/utils/currency"
@@ -579,6 +583,7 @@ const props = defineProps({
 
 const emit = defineEmits(["update:modelValue", "return-created"])
 
+const syncStore = usePOSSyncStore()
 const show = ref(props.modelValue)
 const originalInvoice = ref(null)
 const returnItems = ref([])
@@ -652,62 +657,12 @@ const fetchInvoiceResource = createResource({
 	url: "pos_next.api.invoices.get_invoice_for_return",
 	auto: false,
 	onSuccess(data) {
-		if (data) {
-			// Validate that invoice can be returned
-			if (data.docstatus !== 1) {
-				showWarning(__("Invoice must be submitted to create a return"))
-				return
-			}
-			if (data.is_return === 1) {
-				showWarning(__("Cannot create return against a return invoice"))
-				return
-			}
-
-			// Check if all items have been fully returned
-			const availableItems = data.items.filter((item) => item.qty > 0)
-
-			if (availableItems.length === 0) {
-				showWarning(__("All items from this invoice have already been returned"))
-				originalInvoice.value = null
-				returnItems.value = []
-				return
-			}
-
-			originalInvoice.value = data
-			// Map server 'qty' to 'quantity' for internal consistency
-			returnItems.value = availableItems.map((item) => ({
-				...item,
-				quantity: item.qty, // Standardize to 'quantity' from server's 'qty'
-				selected: false,
-				return_qty: item.qty, // This will be the remaining qty after previous returns
-				original_qty: item.original_qty || item.qty, // Track original quantity
-			}))
-			returnItems.value.forEach(normalizeItemQty)
-
-			// Track payment amounts from original invoice
-			const totalPaidFromPayments = data.payments?.reduce((sum, p) => sum + Math.abs(p.amount || 0), 0) || 0
-			originalPaidAmount.value = data.paid_amount || totalPaidFromPayments || 0
-			originalOutstandingAmount.value = data.outstanding_amount || 0
-
-			// Detect if original invoice was a credit sale (Pay on Account)
-			// Credit sale indicators:
-			// 1. No payments in the payments array, OR
-			// 2. Outstanding amount equals grand total (nothing was paid)
-			const hasNoPayments = !data.payments || data.payments.length === 0
-			const isFullyUnpaid = Math.abs(data.outstanding_amount - data.grand_total) < 0.01
-			isOriginalCreditSale.value = hasNoPayments || (totalPaidFromPayments < 0.01 && isFullyUnpaid)
-
-			// Detect if invoice was partially paid (has both paid amount and outstanding)
-			isPartiallyPaid.value = originalPaidAmount.value > 0 && originalOutstandingAmount.value > 0
-
-			// Load payment methods if not already loaded
-			if (paymentMethods.value.length === 0 && props.posProfile) {
-				loadPaymentMethodsResource.reload()
-			}
-
-			// Initialize payment methods from invoice
-			initializePaymentsFromInvoice()
+		if (data?.pos_profile === props.posProfile && session.user) {
+			cacheReturnInvoice(session.user, props.posProfile, data).catch(error => {
+				console.warn("Could not cache return invoice", error)
+			})
 		}
+		populateReturn(data)
 	},
 	onError(error) {
 		console.error("Error fetching invoice:", error)
@@ -715,38 +670,110 @@ const fetchInvoiceResource = createResource({
 	},
 })
 
-// Resource for creating return invoice
+function populateReturn(data) {
+	if (data) {
+		// Validate that invoice can be returned
+		if (data.docstatus !== 1) {
+			showWarning(__("Invoice must be submitted to create a return"))
+			return
+		}
+		if (data.is_return === 1) {
+			showWarning(__("Cannot create return against a return invoice"))
+			return
+		}
+
+		// Check if all items have been fully returned
+		const availableItems = data.items.filter((item) => item.qty > 0)
+
+		if (availableItems.length === 0) {
+			showWarning(__("All items from this invoice have already been returned"))
+			originalInvoice.value = null
+			returnItems.value = []
+			return
+		}
+
+		originalInvoice.value = data
+		// Map server 'qty' to 'quantity' for internal consistency
+		returnItems.value = availableItems.map((item) => ({
+			...item,
+			quantity: item.qty, // Standardize to 'quantity' from server's 'qty'
+			selected: false,
+			return_qty: item.qty, // This will be the remaining qty after previous returns
+			original_qty: item.original_qty || item.qty, // Track original quantity
+		}))
+		returnItems.value.forEach(normalizeItemQty)
+
+		// Track payment amounts from original invoice
+		const totalPaidFromPayments = data.payments?.reduce((sum, p) => sum + Math.abs(p.amount || 0), 0) || 0
+		originalPaidAmount.value = data.paid_amount || totalPaidFromPayments || 0
+		originalOutstandingAmount.value = data.outstanding_amount || 0
+
+		// Detect if original invoice was a credit sale (Pay on Account)
+		// Credit sale indicators:
+		// 1. No payments in the payments array, OR
+		// 2. Outstanding amount equals grand total (nothing was paid)
+		const hasNoPayments = !data.payments || data.payments.length === 0
+		const isFullyUnpaid = Math.abs(data.outstanding_amount - data.grand_total) < 0.01
+		isOriginalCreditSale.value = hasNoPayments || (totalPaidFromPayments < 0.01 && isFullyUnpaid)
+
+		// Detect if invoice was partially paid (has both paid amount and outstanding)
+		isPartiallyPaid.value = originalPaidAmount.value > 0 && originalOutstandingAmount.value > 0
+
+		// Load payment methods if not already loaded
+		if (!syncStore.isOffline && paymentMethods.value.length === 0 && props.posProfile) {
+			loadPaymentMethodsResource.reload()
+		}
+
+		// Initialize payment methods from invoice
+		initializePaymentsFromInvoice()
+	}
+}
+
+async function loadReturnInvoices() {
+	if (!syncStore.isOffline) return loadInvoicesResource.reload()
+	try {
+		invoiceList.value = await readReturnInvoices(session.user, props.posProfile)
+	} catch (error) {
+		console.error("Error loading cached returns:", error)
+		showError(__("Failed to load cached invoices"))
+	}
+}
+
+function buildReturnInvoice() {
+	return {
+		doctype: "Sales Invoice",
+		pos_profile: props.posProfile,
+		customer: originalInvoice.value.customer,
+		company: originalInvoice.value.company,
+		is_return: 1,
+		return_against: originalInvoice.value.name,
+		is_pos: 1,
+		update_stock: 1,
+		items: selectedItems.value.map((item) => ({
+			item_code: item.item_code,
+			item_name: item.item_name,
+			qty: -Math.abs(item.return_qty), // Negative for returns
+			rate: item.rate,
+			warehouse: item.warehouse,
+			uom: item.uom,
+			conversion_factor: item.conversion_factor || 1,
+			// Link to original invoice item for proper return tracking
+			sales_invoice_item: item.name, // Reference to the original Sales Invoice Item
+		})),
+		payments: refundPayments.value.map(payment => ({
+			mode_of_payment: payment.mode_of_payment,
+			amount: -Math.abs(payment.amount), // Negative for refunds
+		})),
+		remarks:
+			returnReason.value || __('Return against {0}', [originalInvoice.value.name]),
+	}
+}
+
+// Online and queued returns submit the same invoice fields.
 const createReturnResource = createResource({
 	url: "pos_next.api.invoices.submit_invoice",
 	makeParams() {
-		// Build invoice data matching the API's expected format
-		const invoiceData = {
-			doctype: "Sales Invoice",
-			pos_profile: props.posProfile,
-			customer: originalInvoice.value.customer,
-			company: originalInvoice.value.company,
-			is_return: 1,
-			return_against: originalInvoice.value.name,
-			is_pos: 1,
-			update_stock: 1,
-			items: selectedItems.value.map((item) => ({
-				item_code: item.item_code,
-				item_name: item.item_name,
-				qty: -Math.abs(item.return_qty), // Negative for returns
-				rate: item.rate,
-				warehouse: item.warehouse,
-				uom: item.uom,
-				conversion_factor: item.conversion_factor || 1,
-				// Link to original invoice item for proper return tracking
-				sales_invoice_item: item.name, // Reference to the original Sales Invoice Item
-			})),
-			payments: refundPayments.value.map(payment => ({
-				mode_of_payment: payment.mode_of_payment,
-				amount: -Math.abs(payment.amount), // Negative for refunds
-			})),
-			remarks:
-				returnReason.value || __('Return against {0}', [originalInvoice.value.name]),
-		}
+		const invoiceData = buildReturnInvoice()
 
 		// Return in the correct format: invoice as JSON string
 		return {
@@ -785,7 +812,7 @@ const createReturnResource = createResource({
 
 // Lifecycle hooks
 onMounted(() => {
-	if (props.posProfile) {
+	if (props.posProfile && !syncStore.isOffline) {
 		loadPaymentMethodsResource.reload()
 	}
 	document.addEventListener('keydown', handleKeyboardShortcuts)
@@ -801,8 +828,7 @@ watch(
 	(val) => {
 		show.value = val
 		if (val) {
-			// Auto-load invoices when dialog opens
-			loadInvoicesResource.reload()
+			loadReturnInvoices()
 		} else {
 			resetForm()
 		}
@@ -1080,9 +1106,24 @@ function initializePaymentsFromInvoice() {
 	}
 }
 
-function openReturnModal(invoice) {
-	// Fetch the full invoice details with return tracking
+async function openReturnModal(invoice) {
 	submitError.value = ""
+	if (syncStore.isOffline) {
+		if (!invoice.items) {
+			showWarning(__("Open this invoice while online before returning it offline."))
+			return
+		}
+		try {
+			paymentMethods.value = await offlineWorker.getCachedPaymentMethods(props.posProfile) || []
+		} catch (error) {
+			paymentMethods.value = []
+			console.warn("Could not read cached refund methods", error)
+		}
+		if (!paymentMethods.value.length) paymentMethods.value = invoice.payments || []
+		populateReturn(invoice)
+		returnModal.visible = Boolean(originalInvoice.value)
+		return
+	}
 	fetchInvoiceResource.fetch({
 		invoice_name: invoice.name,
 	})
@@ -1191,6 +1232,20 @@ async function handleCreateReturn() {
 	isSubmitting.value = true
 
 	try {
+		if (syncStore.isOffline) {
+			const invoice = buildReturnInvoice()
+			invoice.custom_avenue88_offline_invoice_uuid = crypto.randomUUID()
+			invoice.grand_total = -returnTotal.value
+			await syncStore.saveInvoiceOffline(invoice)
+			invalidateReturnInvoice(session.user, props.posProfile, invoice.return_against).catch(error => {
+				console.warn("Could not invalidate the cached return invoice", error)
+			})
+			invoiceList.value = invoiceList.value.filter(row => row.name !== invoice.return_against)
+			closeReturnModal()
+			showSuccess(__("Return saved offline. ERPNext will post it after sync."))
+			return
+		}
+
 		const result = await createReturnResource.submit()
 
 		// Check if result contains an error (HTTP 417 might return error in response body)

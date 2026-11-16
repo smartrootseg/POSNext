@@ -86,6 +86,7 @@
 							</div>
 							<div class="flex items-center justify-end sm:justify-start gap-1 sm:gap-2">
 								<button
+									v-if="!invoice.data.is_return"
 									@click="editInvoice(invoice)"
 									class="p-1.5 sm:p-2 hover:bg-blue-50 rounded-lg transition-colors touch-manipulation"
 									:title="__('Edit Invoice')"

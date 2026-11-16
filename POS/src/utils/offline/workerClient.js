@@ -396,7 +396,11 @@ class OfflineWorkerClient {
 	}
 
 	async saveOfflineInvoice(invoiceData) {
-		return this.sendMessage("SAVE_INVOICE", { invoiceData })
+		// The cart can contain Vue proxies. Persist the same plain JSON that
+		// the invoice sync sends to ERPNext.
+		return this.sendMessage("SAVE_INVOICE", {
+			invoiceData: JSON.parse(JSON.stringify(invoiceData)),
+		})
 	}
 
 	async searchCachedItems(searchTerm = "", limit = 50) {

@@ -24,7 +24,9 @@ export function percentageDiscount(price, basisPoints) {
         basisPoints <= 0 || basisPoints > 10000) {
         throw new Error("Expected a non-negative minor-unit price and a percentage from 0.01 to 100.");
     }
-    return Number((BigInt(price) * BigInt(basisPoints) + 5000n) / 10000n);
+    const remainder = price % 10000;
+    const whole = (price - remainder) / 10000;
+    return whole * basisPoints + Math.floor((remainder * basisPoints + 5000) / 10000);
 }
 
 /**

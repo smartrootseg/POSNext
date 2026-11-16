@@ -1598,6 +1598,7 @@ async function handlePaymentCompleted(paymentData) {
 				grand_total: cartStore.grandTotal,
 				total_tax: cartStore.totalTax,
 				total_discount: cartStore.totalDiscount,
+				discount_amount: cartStore.additionalDiscount || 0,
 			}
 
 			if (checkoutPromotionQuote.value) {

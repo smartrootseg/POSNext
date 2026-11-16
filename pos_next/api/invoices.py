@@ -336,6 +336,9 @@ def update_invoice(data):
             if pos_profile_doc.currency and not invoice_doc.get("currency"):
                 invoice_doc.currency = pos_profile_doc.currency
 
+            if invoice_doc.get("custom_avenue88_promotion_quote"):
+                invoice_doc.selling_price_list = pos_profile_doc.selling_price_list
+
             # Copy accounting dimensions from POS Profile
             if hasattr(pos_profile_doc, "branch") and pos_profile_doc.branch:
                 invoice_doc.branch = pos_profile_doc.branch
